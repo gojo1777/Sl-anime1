@@ -29,7 +29,7 @@ export default async function handler(req, res) {
       return res.json({ status: true, data: results });
     }
 
-    // 2. Details (render=true — episodes load via JS)
+    // 2. Details
     if (action === "details" || action === "anime") {
       const { data } = await axios.get(scraperUrl(url, true));
       const $ = cheerio.load(data);
@@ -37,13 +37,22 @@ export default async function handler(req, res) {
       const title = $("meta[property='og:title']").attr("content") ?? "";
       const image = $("img[itemprop='image']").attr("src") ?? "";
 
+      // TV Show — episodes
       const episodes = [];
       $("a.ep-card-link").each((i, el) => {
         const link = $(el).attr("href") ?? "";
         const epNum = $(el).find(".ep-number").text().trim();
         const epTitle = $(el).find(".ep-title").text().trim();
-        if (link) {
-          episodes.push({ ep_num: epNum, title: epTitle, link });
+        if (link) episodes.push({ ep_num: epNum, title: epTitle, link });
+      });
+
+      // Movie — direct download links on the page
+      const movie_links = [];
+      $("a[href*='/links/']").each((i, el) => {
+        const rowLink = $(el).attr("href");
+        const quality = $(el).closest("tr").find("strong.quality").text().trim() || "Download";
+        if (rowLink && !movie_links.some(l => l.link === rowLink)) {
+          movie_links.push({ quality, link: rowLink });
         }
       });
 
@@ -53,19 +62,22 @@ export default async function handler(req, res) {
           title,
           image,
           is_tv_show: episodes.length > 0,
-          episodes: episodes.length > 0 ? episodes : null
+          episodes: episodes.length > 0 ? episodes : null,
+          movie_links: movie_links.length > 0 ? movie_links : null
         }
       });
     }
 
-    // 3. Download
+    // 3. Download (resolve /links/ page → Google Drive direct link)
     if (action === "download") {
       const { data: pageHtml } = await axios.get(scraperUrl(url));
       const $page = cheerio.load(pageHtml);
       const linkPages = [];
       $page("a[href*='/links/']").each((i, el) => {
         const rowLink = $page(el).attr("href");
-        let qTxt = $page(el).closest("tr").find("td").text().trim() || $page(el).text().trim();
+        let qTxt = $page(el).closest("tr").find("strong.quality").text().trim()
+          || $page(el).closest("tr").find("td").text().trim()
+          || $page(el).text().trim();
         if (qTxt.includes("1080p")) qTxt = "Full HD 1080p";
         else if (qTxt.includes("720p")) qTxt = "HD 720p";
         else if (qTxt.includes("480p")) qTxt = "SD 480p";
