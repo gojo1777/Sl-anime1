@@ -33,20 +33,25 @@ export default async function handler(req, res) {
     if (action === "details" || action === "anime") {
       const { data } = await axios.get(scraperUrl(url, true));
       const $ = cheerio.load(data);
+
+      const title = $("meta[property='og:title']").attr("content") ?? "";
+      const image = $("img[itemprop='image']").attr("src") ?? "";
+
       const episodes = [];
-      $("ul.episodios li").each((i, el) => {
-        const link = $(el).find("a.ep-card-link").attr("href") ?? "";
+      $("a.ep-card-link").each((i, el) => {
+        const link = $(el).attr("href") ?? "";
         const epNum = $(el).find(".ep-number").text().trim();
         const epTitle = $(el).find(".ep-title").text().trim();
         if (link) {
           episodes.push({ ep_num: epNum, title: epTitle, link });
         }
       });
+
       return res.json({
         status: true,
         data: {
-          title: $(".data h1").text().trim(),
-          image: $(".poster img").attr("src"),
+          title,
+          image,
           is_tv_show: episodes.length > 0,
           episodes: episodes.length > 0 ? episodes : null
         }
