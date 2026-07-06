@@ -1,16 +1,22 @@
 import axios from "axios";
 import * as cheerio from "cheerio";
 
-const SCRAPER_KEY = "f9ea79e7589a5989220a0c27509c0bf0";
+const BASE_URL = "https://animeclub2.com";
 
-function scraperUrl(targetUrl, render = false, timeout = 25000) {
-    let url = `http://api.scraperapi.com/?api_key=${SCRAPER_KEY}&url=${encodeURIComponent(targetUrl)}`;
-    if (render) url += `&render=true&timeout=${timeout}`;
-    return url;
-}
+const BROWSER_HEADERS = {
+    "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    Accept:
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    Referer: `${BASE_URL}/`,
+};
 
-async function fetchHtml(targetUrl, render = false, renderTimeout = 25000, axiosTimeout = 35000) {
-    const { data } = await axios.get(scraperUrl(targetUrl, render, renderTimeout), { timeout: axiosTimeout });
+async function fetchHtml(targetUrl, timeoutMs = 15000) {
+    const { data } = await axios.get(targetUrl, {
+        headers: BROWSER_HEADERS,
+        timeout: timeoutMs,
+    });
     return data;
 }
 
@@ -25,7 +31,7 @@ export default async (req, res) => {
         const query = req.query.query || req.query.q;
         if (!query) return res.json({ status: false, error: "query required" });
         try {
-            const html = await fetchHtml(`https://animeclub2.com/?s=${encodeURIComponent(query)}`);
+            const html = await fetchHtml(`${BASE_URL}/?s=${encodeURIComponent(query)}`);
             const $ = cheerio.load(html);
             const results = [];
             $("article").each((i, el) => {
@@ -48,11 +54,10 @@ export default async (req, res) => {
 
         const is_tv_show = url.includes("/tvshows/");
 
-        // Try up to 2 times (ScraperAPI render sometimes needs a retry)
+        // Try up to 2 times (occasionally the site renders inconsistently on first load)
         for (let attempt = 1; attempt <= 2; attempt++) {
             try {
-                // Longer render timeout for episode-heavy pages
-                const html = await fetchHtml(url, true, 30000, 40000);
+                const html = await fetchHtml(url);
                 const $ = cheerio.load(html);
 
                 const title = $("meta[property='og:title']").attr("content") ||
@@ -120,7 +125,7 @@ export default async (req, res) => {
 
         for (let attempt = 1; attempt <= 2; attempt++) {
             try {
-                const html = await fetchHtml(url, true, 30000, 40000);
+                const html = await fetchHtml(url);
                 const $ = cheerio.load(html);
 
                 const links = [];
@@ -155,7 +160,7 @@ export default async (req, res) => {
         const url = req.query.url;
         if (!url) return res.json({ status: false, error: "url required" });
         try {
-            const html = await fetchHtml(url, true, 25000, 35000);
+            const html = await fetchHtml(url);
             const $ = cheerio.load(html);
             const download_links = [];
 
@@ -176,7 +181,7 @@ export default async (req, res) => {
             if (!download_links.length) {
                 $("a[href^='http']").each((i, el) => {
                     const href = $(el).attr("href") || "";
-                    if (href && !href.includes("animeclub2.com") && !href.includes("scraperapi")) {
+                    if (href && !href.includes("animeclub2.com")) {
                         download_links.push({ quality: $(el).text().trim() || `Link ${i + 1}`, direct_link: href });
                     }
                 });
