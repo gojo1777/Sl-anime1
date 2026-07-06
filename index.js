@@ -29,30 +29,36 @@ export default async function handler(req, res) {
       return res.json({ status: true, data: results });
     }
 
-    // 2. Details
+    // 2. Details — parallel fetch: static (title/image) + rendered (episodes/links)
     if (action === "details" || action === "anime") {
-      const { data } = await axios.get(scraperUrl(url, true));
-      const $ = cheerio.load(data);
+      const [staticRes, renderRes] = await Promise.all([
+        axios.get(scraperUrl(url, false)),
+        axios.get(scraperUrl(url, true))
+      ]);
 
-      const title = $("meta[property='og:title']").attr("content") ?? "";
-      const image = $("img[itemprop='image']").attr("src") ?? "";
+      const $s = cheerio.load(staticRes.data);
+      const $r = cheerio.load(renderRes.data);
 
-      // TV Show — episodes
+      // Title + Image from static HTML (always available)
+      const title = $s("meta[property='og:title']").attr("content") ?? "";
+      const image = $s("img[itemprop='image']").attr("src") ?? "";
+
+      // Episodes from rendered HTML
       const episodes = [];
-      $("a.ep-card-link").each((i, el) => {
-        const link = $(el).attr("href") ?? "";
-        const epNum = $(el).find(".ep-number").text().trim();
-        const epTitle = $(el).find(".ep-title").text().trim();
+      $r("a.ep-card-link").each((i, el) => {
+        const link = $r(el).attr("href") ?? "";
+        const epNum = $r(el).find(".ep-number").text().trim();
+        const epTitle = $r(el).find(".ep-title").text().trim();
         if (link) episodes.push({ ep_num: epNum, title: epTitle, link });
       });
 
-      // Movie — direct download links on the page
+      // Movie download links from rendered HTML
       const movie_links = [];
-      $("a[href*='/links/']").each((i, el) => {
-        const rowLink = $(el).attr("href");
-        const quality = $(el).closest("tr").find("strong.quality").text().trim() || "Download";
-        if (rowLink && !movie_links.some(l => l.link === rowLink)) {
-          movie_links.push({ quality, link: rowLink });
+      $r("tr[id^='link-']").each((i, el) => {
+        const link = $r(el).find("a[href*='/links/']").attr("href");
+        const quality = $r(el).find("strong.quality").text().trim() || "Download";
+        if (link && !movie_links.some(l => l.link === link)) {
+          movie_links.push({ quality, link });
         }
       });
 
@@ -68,20 +74,14 @@ export default async function handler(req, res) {
       });
     }
 
-    // 3. Download (resolve /links/ page → Google Drive direct link)
+    // 3. Download — resolve /links/ → Google Drive direct link
     if (action === "download") {
       const { data: pageHtml } = await axios.get(scraperUrl(url));
       const $page = cheerio.load(pageHtml);
       const linkPages = [];
       $page("a[href*='/links/']").each((i, el) => {
         const rowLink = $page(el).attr("href");
-        let qTxt = $page(el).closest("tr").find("strong.quality").text().trim()
-          || $page(el).closest("tr").find("td").text().trim()
-          || $page(el).text().trim();
-        if (qTxt.includes("1080p")) qTxt = "Full HD 1080p";
-        else if (qTxt.includes("720p")) qTxt = "HD 720p";
-        else if (qTxt.includes("480p")) qTxt = "SD 480p";
-        else qTxt = "Download";
+        let qTxt = $page(el).closest("tr").find("strong.quality").text().trim() || "Download";
         if (rowLink && !linkPages.some(p => p.rowLink === rowLink)) {
           linkPages.push({ quality: qTxt, rowLink });
         }
