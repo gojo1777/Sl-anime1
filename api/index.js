@@ -29,7 +29,7 @@ export default async function handler(req, res) {
       return res.json({ status: true, data: results });
     }
 
-    // 2. Details — parallel fetch: static (title/image) + rendered (episodes/links)
+    // 2. Details
     if (action === "details" || action === "anime") {
       const [staticRes, renderRes] = await Promise.all([
         axios.get(scraperUrl(url, false)),
@@ -39,11 +39,9 @@ export default async function handler(req, res) {
       const $s = cheerio.load(staticRes.data);
       const $r = cheerio.load(renderRes.data);
 
-      // Title + Image from static HTML (always available)
       const title = $s("meta[property='og:title']").attr("content") ?? "";
       const image = $s("img[itemprop='image']").attr("src") ?? "";
 
-      // Episodes from rendered HTML
       const episodes = [];
       $r("a.ep-card-link").each((i, el) => {
         const link = $r(el).attr("href") ?? "";
@@ -52,7 +50,6 @@ export default async function handler(req, res) {
         if (link) episodes.push({ ep_num: epNum, title: epTitle, link });
       });
 
-      // Movie download links from rendered HTML
       const movie_links = [];
       $r("tr[id^='link-']").each((i, el) => {
         const link = $r(el).find("a[href*='/links/']").attr("href");
@@ -74,22 +71,38 @@ export default async function handler(req, res) {
       });
     }
 
-    // 3. Download — resolve /links/ → Google Drive direct link
+    // 3. Download — render=true to bypass ad countdown on /links/ pages
     if (action === "download") {
-      const { data: pageHtml } = await axios.get(scraperUrl(url));
+      const { data: pageHtml } = await axios.get(scraperUrl(url, true));
       const $page = cheerio.load(pageHtml);
+
+      // Direct /links/ URL — extract Drive link immediately
+      if (url.includes("/links/")) {
+        const driveMatch = pageHtml.match(/https:\/\/drive\.google\.com\/[a-zA-Z0-9?%=\-_/.]+/);
+        if (driveMatch) {
+          const fileId = driveMatch[0].match(/[-\w]{25,}/);
+          if (fileId) {
+            const directLink = `https://drive.usercontent.google.com/download?id=${fileId[0]}&export=download&authuser=0`;
+            return res.json({ status: true, results: 1, download_links: [{ quality: "Download", direct_link: directLink }] });
+          }
+        }
+        return res.json({ status: true, results: 0, download_links: [] });
+      }
+
+      // Episode/movie page — find all /links/ then resolve each
       const linkPages = [];
       $page("a[href*='/links/']").each((i, el) => {
         const rowLink = $page(el).attr("href");
-        let qTxt = $page(el).closest("tr").find("strong.quality").text().trim() || "Download";
+        const quality = $page(el).closest("tr").find("strong.quality").text().trim() || "Download";
         if (rowLink && !linkPages.some(p => p.rowLink === rowLink)) {
-          linkPages.push({ quality: qTxt, rowLink });
+          linkPages.push({ quality, rowLink });
         }
       });
+
       const final_links = [];
       for (const item of linkPages) {
         try {
-          const { data: linkHtml } = await axios.get(scraperUrl(item.rowLink));
+          const { data: linkHtml } = await axios.get(scraperUrl(item.rowLink, true));
           const driveMatch = linkHtml.match(/https:\/\/drive\.google\.com\/[a-zA-Z0-9?%=\-_/.]+/);
           if (driveMatch) {
             const fileId = driveMatch[0].match(/[-\w]{25,}/);
