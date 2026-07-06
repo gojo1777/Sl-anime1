@@ -4,7 +4,8 @@ import * as cheerio from "cheerio";
 const SCRAPER_API_KEY = "f9ea79e7589a5989220a0c27509c0bf0";
 
 function scraperUrl(targetUrl, render = false) {
-  return `http://api.scraperapi.com?api_key=${SCRAPER_API_KEY}${render ? "&render=true" : ""}&url=${encodeURIComponent(targetUrl)}`;
+  const timeout = render ? "&timeout=25000" : "";
+  return `http://api.scraperapi.com?api_key=${SCRAPER_API_KEY}${render ? "&render=true" : ""}${timeout}&url=${encodeURIComponent(targetUrl)}`;
 }
 
 export default async function handler(req, res) {
@@ -29,31 +30,26 @@ export default async function handler(req, res) {
       return res.json({ status: true, data: results });
     }
 
-    // 2. Details
+    // 2. Details — ONE render=true request only
     if (action === "details" || action === "anime") {
-      const [staticRes, renderRes] = await Promise.all([
-        axios.get(scraperUrl(url, false)),
-        axios.get(scraperUrl(url, true))
-      ]);
+      const { data } = await axios.get(scraperUrl(url, true));
+      const $ = cheerio.load(data);
 
-      const $s = cheerio.load(staticRes.data);
-      const $r = cheerio.load(renderRes.data);
-
-      const title = $s("meta[property='og:title']").attr("content") ?? "";
-      const image = $s("img[itemprop='image']").attr("src") ?? "";
+      const title = $("meta[property='og:title']").attr("content") ?? "";
+      const image = $("img[itemprop='image']").attr("src") ?? "";
 
       const episodes = [];
-      $r("a.ep-card-link").each((i, el) => {
-        const link = $r(el).attr("href") ?? "";
-        const epNum = $r(el).find(".ep-number").text().trim();
-        const epTitle = $r(el).find(".ep-title").text().trim();
+      $("a.ep-card-link").each((i, el) => {
+        const link = $(el).attr("href") ?? "";
+        const epNum = $(el).find(".ep-number").text().trim();
+        const epTitle = $(el).find(".ep-title").text().trim();
         if (link) episodes.push({ ep_num: epNum, title: epTitle, link });
       });
 
       const movie_links = [];
-      $r("tr[id^='link-']").each((i, el) => {
-        const link = $r(el).find("a[href*='/links/']").attr("href");
-        const quality = $r(el).find("strong.quality").text().trim() || "Download";
+      $("tr[id^='link-']").each((i, el) => {
+        const link = $(el).find("a[href*='/links/']").attr("href");
+        const quality = $(el).find("strong.quality").text().trim() || "Download";
         if (link && !movie_links.some(l => l.link === link)) {
           movie_links.push({ quality, link });
         }
@@ -71,14 +67,12 @@ export default async function handler(req, res) {
       });
     }
 
-    // 3. Download — render=true to bypass ad countdown on /links/ pages
+    // 3. Download — render=true to bypass ad countdown
     if (action === "download") {
-      const { data: pageHtml } = await axios.get(scraperUrl(url, true));
-      const $page = cheerio.load(pageHtml);
-
-      // Direct /links/ URL — extract Drive link immediately
+      // Direct /links/ URL
       if (url.includes("/links/")) {
-        const driveMatch = pageHtml.match(/https:\/\/drive\.google\.com\/[a-zA-Z0-9?%=\-_/.]+/);
+        const { data: linkHtml } = await axios.get(scraperUrl(url, true));
+        const driveMatch = linkHtml.match(/https:\/\/drive\.google\.com\/[a-zA-Z0-9?%=\-_/.]+/);
         if (driveMatch) {
           const fileId = driveMatch[0].match(/[-\w]{25,}/);
           if (fileId) {
@@ -89,7 +83,9 @@ export default async function handler(req, res) {
         return res.json({ status: true, results: 0, download_links: [] });
       }
 
-      // Episode/movie page — find all /links/ then resolve each
+      // Episode/movie page — find /links/ then resolve
+      const { data: pageHtml } = await axios.get(scraperUrl(url, true));
+      const $page = cheerio.load(pageHtml);
       const linkPages = [];
       $page("a[href*='/links/']").each((i, el) => {
         const rowLink = $page(el).attr("href");
